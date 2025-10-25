@@ -75,6 +75,11 @@ class AlgoritmoGeneticoTSP:
         idx = np.random.choice(len(populacao), p=probs)
         return populacao[idx].copy()
 
+    def selecao_torneio(self, populacao, fitness_scores, k=3):
+        participantes = random.sample(list(zip(populacao, fitness_scores)), k)
+        participantes.sort(key=lambda x: x[1])
+        return participantes[0][0].copy()
+
     # ------------------------- crossover -------------------------
     def crossover_ox(self, pai1, pai2):
         if random.random() > self.taxa_crossover:
@@ -113,12 +118,16 @@ class AlgoritmoGeneticoTSP:
         melhor_individuo = None
         melhor_fitness = float('inf')
         sem_melhoria = 0
+        limite_sem_melhoria = 300  # 🔹 Parar se não houver melhora em X gerações
 
         for geracao in range(self.max_geracoes):
             fitness_scores = [self.calcular_fitness(ind) for ind in populacao]
             min_fit_idx = np.argmin(fitness_scores)
-            if fitness_scores[min_fit_idx] < melhor_fitness:
-                melhor_fitness = fitness_scores[min_fit_idx]
+            melhor_atual = fitness_scores[min_fit_idx]
+
+            # --- Verifica se houve melhora ---
+            if melhor_atual + 1e-6 < melhor_fitness:  # pequena tolerância numérica
+                melhor_fitness = melhor_atual
                 melhor_individuo = populacao[min_fit_idx].copy()
                 sem_melhoria = 0
             else:
@@ -133,8 +142,8 @@ class AlgoritmoGeneticoTSP:
 
             # --- reprodução ---
             while len(nova_pop) < self.tamanho_populacao:
-                pai1 = self.selecao_roleta(populacao, fitness_scores)
-                pai2 = self.selecao_roleta(populacao, fitness_scores)
+                pai1 = self.selecao_torneio(populacao, fitness_scores)
+                pai2 = self.selecao_torneio(populacao, fitness_scores)
                 f1, f2 = self.crossover_ox(pai1, pai2)
                 f1 = self.mutacao_inversao(f1)
                 f2 = self.mutacao_inversao(f2)
@@ -143,16 +152,27 @@ class AlgoritmoGeneticoTSP:
             populacao = nova_pop[:self.tamanho_populacao]
 
             # --- mutação adaptativa ---
-            if sem_melhoria > 50:
+            if sem_melhoria == 50:
                 self.taxa_mutacao = min(self.taxa_mutacao * 1.3, 0.5)
+            elif sem_melhoria == 100:
+                self.taxa_mutacao = 0.2
+            elif sem_melhoria == 200:
+                self.taxa_mutacao = 0.3
 
             # --- reinicialização parcial ---
-            if sem_melhoria > 200:
+            if sem_melhoria in [150, 250]:
                 qtd = int(0.2 * self.tamanho_populacao)
                 for _ in range(qtd):
-                    populacao[random.randint(0, self.tamanho_populacao - 1)] = self.gerar_individuo_aleatorio()
-                sem_melhoria = 0
-                self.taxa_mutacao = 0.1  # reset
+                    idx = random.randint(0, self.tamanho_populacao - 1)
+                    populacao[idx] = self.gerar_individuo_aleatorio()
+                print(f"⚠️ Reinicialização parcial na geração {geracao}.")
+                # (não zera o sem_melhoria aqui — continua contando!)
+
+            # --- critério de parada ---
+            if sem_melhoria >= limite_sem_melhoria:
+                print(
+                    f"⏹ Parando na geração {geracao}: nenhuma melhora em {limite_sem_melhoria} gerações consecutivas.")
+                break
 
             if geracao % 50 == 0:
                 print(f"Geração {geracao}: Melhor fitness = {melhor_fitness:.2f} | mut={self.taxa_mutacao:.2f}")
@@ -170,18 +190,48 @@ class AlgoritmoGeneticoTSP:
         plt.show()
         plt.close()
 
-    def plotar_rota(self, individuo):
+    def plotar_rota(self, individuo: List[int]):
+        """Plota a rota encontrada"""
         plt.figure(figsize=(12, 8))
-        x = [self.coordenadas[i][0] for i in individuo]
-        y = [self.coordenadas[i][1] for i in individuo]
-        plt.plot(x, y, 'k-', linewidth=2, alpha=0.6)
-        plt.scatter(x, y, c='blue', s=80)
-        plt.scatter(self.coordenadas[0][0], self.coordenadas[0][1], c='red', s=200, marker='s', label='Depósito')
-        plt.title(f"Melhor rota (distância: {self.calcular_fitness(individuo):.2f})")
+
+        # Plota todas as cidades
+        x_coords = [self.coordenadas[i][0] for i in range(len(self.coordenadas))]
+        y_coords = [self.coordenadas[i][1] for i in range(len(self.coordenadas))]
+
+        # Plota cidades por família
+        cores = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
+        for l, familia in enumerate(self.familias):
+            for no in familia:
+                plt.scatter(self.coordenadas[no][0], self.coordenadas[no][1],
+                           c=cores[l % len(cores)], s=100, alpha=0.7,
+                           label=f'Família {l+1}' if no == familia[0] else "")
+
+        # Plota depósito
+        plt.scatter(self.coordenadas[0][0], self.coordenadas[0][1],
+                   c='black', s=200, marker='s', label='Depósito')
+
+        # Plota rota
+        for i in range(len(individuo) - 1):
+            x1, y1 = self.coordenadas[individuo[i]]
+            x2, y2 = self.coordenadas[individuo[i + 1]]
+            plt.plot([x1, x2], [y1, y2], 'k-', alpha=0.6, linewidth=2)
+
+            # Adiciona setas
+            dx, dy = x2 - x1, y2 - y1
+            plt.arrow(x1, y1, dx * 0.8, dy * 0.8,
+                     head_width=2, head_length=2, fc='black', ec='black', alpha=0.6)
+
+        # Numera os nós
+        for i, (x, y) in enumerate(self.coordenadas):
+            plt.annotate(str(i), (x, y), xytext=(5, 5), textcoords='offset points')
+
+        plt.title(f'Melhor Rota Encontrada (Distância: {self.calcular_fitness(individuo):.2f})')
+        plt.xlabel('X')
+        plt.ylabel('Y')
         plt.legend()
-        plt.grid(True)
+        plt.grid(True, alpha=0.3)
         plt.show()
-        plt.close()
+        return None
 
 
 def ler_tsp(arquivo):
@@ -256,13 +306,30 @@ def resolver_instancia(arquivo: str, caminho_saida: str):
         print(f"\n=== Executando instância: {arquivo} ===")
 
         # === Configurações do AG ===
-        config_ag = {
-            "tamanho_populacao": 1000,
-            "taxa_mutacao": 0.15,
-            "taxa_crossover": 0.8,
-            "elite_size": 15,
-            "max_geracoes": 1500
-        }
+        # config_ag = {
+        #     "tamanho_populacao": 300,
+        #     "taxa_mutacao": 0.15,
+        #     "taxa_crossover": 0.8,
+        #     "elite_size": 20,
+        #     "max_geracoes": 1500
+        # }
+
+        if len(C) <= 100:
+            config_ag = {
+                "tamanho_populacao": 100,
+                "taxa_mutacao": 0.15,
+                "taxa_crossover": 0.8,
+                "elite_size": 5,
+                "max_geracoes": 2000
+            }
+        else:
+            config_ag = {
+                "tamanho_populacao": 400,
+                "taxa_mutacao": 0.15,
+                "taxa_crossover": 0.8,
+                "elite_size": 20,
+                "max_geracoes": 2000
+            }
 
         # === Executa o algoritmo ===
         ag = AlgoritmoGeneticoTSP(
@@ -304,7 +371,7 @@ def resolver_instancia(arquivo: str, caminho_saida: str):
         else:
             print("✗ Solução é inválida!")
 
-        ag.plotar_convergencia()
+        # ag.plotar_convergencia()
         ag.plotar_rota(melhor_individuo)
 
     except Exception as e:
@@ -313,28 +380,24 @@ def resolver_instancia(arquivo: str, caminho_saida: str):
 
 
 def main():
-    # arquivos = [
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/a280_20_1001_1001_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/att48_5_1001_1001_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/att48_5_1001_1002_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/att48_5_1001_1003_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/bier127_10_1001_1001_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/bier127_10_1001_1002_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/bier127_10_1001_1003_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/burma14_3_1001_1001_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/burma14_3_1001_1002_2.tsp',
-    #     '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/burma14_3_1001_1003_2.tsp'
-    # ]
-
     arquivos = [
-        '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/a280_20_1001_1001_2.tsp'
+         # '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/a280_20_1001_1001_2.tsp',
+        # '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/att48_5_1001_1001_2.tsp',
+        # '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/att48_5_1001_1002_2.tsp',
+        # '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/att48_5_1001_1003_2.tsp',
+        # '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/bier127_10_1001_1001_2.tsp',
+        # '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/bier127_10_1001_1002_2.tsp',
+        # '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/bier127_10_1001_1003_2.tsp',
+        '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/burma14_3_1001_1001_2.tsp',
+        '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/burma14_3_1001_1002_2.tsp',
+        '/Users/rdsgomes/Library/CloudStorage/GoogleDrive-dougsk8pg@gmail.com/My Drive/Development/Ads_fatec/TCC/burma14_3_1001_1003_2/burma14_3_1001_1003_2.tsp'
     ]
 
     # Gera string com data e hora atuais
     agora = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     # Cria nome de arquivo com timestamp
-    caminho_saida = f"resultados_ag_{agora}.csv"
+    caminho_saida = os.path.join("resultados", f"resultados_ag_{agora}.csv")
 
     # Cria o CSV com cabeçalho
     with open(caminho_saida, mode="w", newline="") as f:
