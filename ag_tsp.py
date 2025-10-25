@@ -150,47 +150,46 @@ class GeneticAlgorithmTSP:
         plt.xlabel('Geração')
         plt.ylabel('Distância')
         plt.grid(True, alpha=0.4)
-        plt.show()
+        # plt.show()
         plt.close()
 
-    def plotar_rota(self, individuo):
-        """Plota a rota final encontrada pelo algoritmo."""
-        plt.figure(figsize=(12, 8))
-        x_coords = [self.coordenadas[i][0] for i in range(len(self.coordenadas))]
-        y_coords = [self.coordenadas[i][1] for i in range(len(self.coordenadas))]
+    def plotar_rota(self, individuo, caminho: str = None, mostrar: bool = False):
+        """Plota a rota encontrada e opcionalmente salva em arquivo."""
+        fig, ax = plt.subplots(figsize=(12, 8))
 
-        # Cores para as famílias
+        # --- Plota as cidades ---
         cores = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'cyan', 'magenta']
-
-        # Plota cidades por família
         for l, familia in enumerate(self.familias):
             for no in familia:
-                plt.scatter(self.coordenadas[no][0], self.coordenadas[no][1],
+                ax.scatter(self.coordenadas[no][0], self.coordenadas[no][1],
                            c=cores[l % len(cores)], s=100, alpha=0.7,
-                           label=f'Família {l+1}' if no == familia[0] else "")
+                           label=f'Família {l + 1}' if no == familia[0] else "")
 
-        # Plota o depósito
-        plt.scatter(self.coordenadas[0][0], self.coordenadas[0][1],
+        # --- Plota o depósito ---
+        ax.scatter(self.coordenadas[0][0], self.coordenadas[0][1],
                    c='black', s=200, marker='s', label='Depósito')
 
-        # Plota a rota
+        # --- Plota a rota ---
         for i in range(len(individuo) - 1):
             x1, y1 = self.coordenadas[individuo[i]]
             x2, y2 = self.coordenadas[individuo[i + 1]]
-            plt.plot([x1, x2], [y1, y2], 'k-', alpha=0.6, linewidth=2)
+            ax.plot([x1, x2], [y1, y2], 'k-', alpha=0.6, linewidth=2)
 
-            # Adiciona setas para o sentido
-            dx, dy = x2 - x1, y2 - y1
-            plt.arrow(x1, y1, dx * 0.8, dy * 0.8,
-                     head_width=2, head_length=2, fc='black', ec='black', alpha=0.6)
-
-        # Numera os nós
+        # --- Numera os nós ---
         for i, (x, y) in enumerate(self.coordenadas):
-            plt.annotate(str(i), (x, y), xytext=(5, 5), textcoords='offset points', fontsize=8)
+            ax.annotate(str(i), (x, y), xytext=(5, 5), textcoords='offset points', fontsize=8)
 
-        plt.title(f'Melhor Rota (Distância: {self.calcular_fitness(individuo):.2f})')
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.show()
+        ax.set_title(f"Melhor Rota (Distância: {self.calcular_fitness(individuo):.2f})")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # --- salva ou mostra ---
+        if caminho:
+            fig.savefig(caminho, dpi=300, bbox_inches='tight')
+            print(f"📸 Rota salva em: {caminho}")
+        if mostrar:
+            plt.show()
+
+        plt.close(fig)
