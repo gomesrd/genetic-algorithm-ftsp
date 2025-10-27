@@ -2,7 +2,7 @@ import numpy as np
 import random
 import math
 import matplotlib.pyplot as plt
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from configuracao import GeneticAlgorithmConfig
 
@@ -16,7 +16,7 @@ class GeneticAlgorithmTSP:
         coordenadas: List[Tuple[float,float]] índice = nó
         familias: List[List[int]] lista de listas de nós (cada sublista é uma família)
         visitas_familia: List[int] quantidade a visitar em cada família (mesmo comprimento que familias)
-        familia_no: dict {no: family_idx+1} (como no seu código original)
+        familia_no: dict {no: family_idx+1}
         """
         self.coordenadas = coordenadas
         self.familias = familias
@@ -41,8 +41,6 @@ class GeneticAlgorithmTSP:
 
         # matriz de distâncias pré-computada
         self._dist = self._precompute_dist()
-
-        # estrutura auxiliar: mapeia família -> set de nós (rápido p/ checagens)
         self._familia_sets = [set(f) for f in self.familias]
 
     # ======================================================
@@ -53,7 +51,7 @@ class GeneticAlgorithmTSP:
         D = np.zeros((n, n), dtype=float)
         for i in range(n):
             xi, yi = self.coordenadas[i]
-            for j in range(i+1, n):
+            for j in range(i + 1, n):
                 xj, yj = self.coordenadas[j]
                 d = math.hypot(xi - xj, yi - yj)
                 D[i, j] = d
@@ -71,18 +69,24 @@ class GeneticAlgorithmTSP:
                 cont_fam[fidx - 1] += 1
         return cont_fam
 
+    @staticmethod
+    def _fitness_de(individuo, dist):
+        # versão estática mais rápida recebendo dist por referência
+        s = 0.0
+        for i in range(len(individuo) - 1):
+            s += dist[individuo[i], individuo[i + 1]]
+        return s
+
     def calcular_fitness(self, individuo):
-        return sum(self._dist[individuo[i], individuo[i+1]] for i in range(len(individuo) - 1))
+        return self._fitness_de(individuo, self._dist)
 
     # ======================================================
     # ----------- Geração / Reparo de indivíduos -----------
     # ======================================================
     def _amostrar_nos_por_familia(self):
-        """Sorteia nós respeitando visitas_familia por família."""
         individuo = [0]
         for l, familia in enumerate(self.familias):
             k = self.visitas_familia[l]
-            # se a família tem exatamente k nós, pega todos; caso contrário, amostra
             if k >= len(familia):
                 nos_sel = list(familia)
             else:
@@ -95,77 +99,71 @@ class GeneticAlgorithmTSP:
         return self._amostrar_nos_por_familia()
 
     def _insercao_mais_barata(self, rota: List[int], novo_no: int) -> List[int]:
-        """Insere novo_no na melhor posição (rota contém 0...0)."""
         melhor_custo = float('inf')
         melhor_pos = 1
+        dist = self._dist
         for i in range(len(rota) - 1):
-            a, b = rota[i], rota[i+1]
-            delta = self._dist[a, novo_no] + self._dist[novo_no, b] - self._dist[a, b]
+            a, b = rota[i], rota[i + 1]
+            delta = dist[a, novo_no] + dist[novo_no, b] - dist[a, b]
             if delta < melhor_custo:
                 melhor_custo = delta
                 melhor_pos = i + 1
-        rota_corrigida = rota[:melhor_pos] + [novo_no] + rota[melhor_pos:]
-        return rota_corrigida
+        return rota[:melhor_pos] + [novo_no] + rota[melhor_pos:]
 
     def _reparo_por_familia(self, individuo: List[int]) -> List[int]:
         """
         Repara um indivíduo para que exatamente visitas_familia[l] nós de cada família apareçam.
-        Remove excedentes escolhendo remoções de menor impacto de custo e repõe faltantes por inserção barata.
+        Remove excedentes de menor impacto e adiciona faltantes por inserção barata.
         """
+        dist = self._dist
         for _ in range(self.config.repeticoes_reparo_max):
             cont = self._contagem_por_familia(individuo)
             ok = True
-            # 1) remover excedentes
+
+            # remover excedentes
             for fidx, (count, need) in enumerate(zip(cont, self.visitas_familia)):
                 if count > need:
                     ok = False
-                    # candidatos para remoção: posições desses nós
                     posicoes = [i for i, no in enumerate(individuo[1:-1], start=1) if no in self._familia_sets[fidx]]
-                    # compute melhor remoção (menor aumento de custo negativo = maior redução)
                     melhor_delta = float('inf')
                     melhor_pos = None
                     for p in posicoes:
-                        a, x, b = individuo[p-1], individuo[p], individuo[p+1]
-                        delta = (self._dist[a, b] - (self._dist[a, x] + self._dist[x, b]))
-                        # delta < 0 significa que remover x AUMENTA custo; queremos menor custo final => maximizar delta
-                        # mas como comparamos custos após remoção, tratamos como "custo efetivo" = -delta
-                        custo_efetivo = -delta
+                        a, x, b = individuo[p - 1], individuo[p], individuo[p + 1]
+                        custo_efetivo = -(dist[a, b] - (dist[a, x] + dist[x, b]))
                         if custo_efetivo < melhor_delta:
                             melhor_delta = custo_efetivo
                             melhor_pos = p
                     if melhor_pos is not None:
-                        individuo = individuo[:melhor_pos] + individuo[melhor_pos+1:]
+                        individuo = individuo[:melhor_pos] + individuo[melhor_pos + 1:]
+
             if ok:
-                # 2) adicionar faltantes
-                cont = self._contagem_por_familia(individuo)  # recalc
+                # adicionar faltantes
+                cont = self._contagem_por_familia(individuo)
                 for fidx, (count, need) in enumerate(zip(cont, self.visitas_familia)):
                     if count < need:
                         ok = False
-                        # nós disponíveis desta família que ainda não estão na rota
                         atuais = set(individuo[1:-1])
                         candidatos = [n for n in self.familias[fidx] if n not in atuais]
                         if not candidatos:
-                            # se não houver candidato (edge case), reamostra total
                             return self.gerar_individuo_aleatorio()
-                        # insere pelo critério de inserção mais barata
                         melhor_add = None
                         melhor_delta = float('inf')
                         melhor_pos = None
+                        # melhor inserção barata (linear)
                         for cand in candidatos:
-                            # avaliar inserção mais barata
-                            # variação de custo ao inserir em cada aresta:
                             for i in range(len(individuo) - 1):
-                                a, b = individuo[i], individuo[i+1]
-                                delta = self._dist[a, cand] + self._dist[cand, b] - self._dist[a, b]
+                                a, b = individuo[i], individuo[i + 1]
+                                delta = dist[a, cand] + dist[cand, b] - dist[a, b]
                                 if delta < melhor_delta:
                                     melhor_delta = delta
                                     melhor_add = cand
                                     melhor_pos = i + 1
                         if melhor_add is not None:
                             individuo = individuo[:melhor_pos] + [melhor_add] + individuo[melhor_pos:]
+
             if ok:
                 break
-        # se ainda estiver inválido por algum motivo, recorre à geração aleatória (fallback raro)
+
         return individuo if self.validar_individuo(individuo) else self.gerar_individuo_aleatorio()
 
     def validar_individuo(self, individuo):
@@ -178,31 +176,26 @@ class GeneticAlgorithmTSP:
     # ---------------- Inicialização -----------------------
     # ======================================================
     def _inicializar_boa(self) -> List[int]:
-        """
-        Seed “boa”: best-of-k amostras + uma passagem de inserção gulosa para reduzir custo.
-        """
         k = self.config.bestofk_init
         candidatos = [self._amostrar_nos_por_familia() for _ in range(k)]
-        # ajuste por inserção gulosa (nearest insertion) sobre a parte interna
+
         def nearest_insertion(rota):
             internos = rota[1:-1]
             if len(internos) <= 2:
                 return rota
-            # começa com nó mais próximo do depósito
-            start = min(internos, key=lambda n: self._dist[0, n])
+            dist = self._dist
+            start = min(internos, key=lambda n: dist[0, n])
             tour = [0, start, 0]
             restantes = set(internos)
             restantes.remove(start)
             while restantes:
-                # escolhe nó mais próximo do tour
-                melhor_no = None
-                melhor_dist = float('inf')
+                melhor_no, melhor_dist = None, float('inf')
+                # nó mais próximo do tour (ignora depósito)
                 for n in restantes:
-                    d = min(self._dist[n, t] for t in tour if t != 0)
+                    d = min(dist[n, t] for t in tour if t != 0)
                     if d < melhor_dist:
                         melhor_dist = d
                         melhor_no = n
-                # insere no mais barato lugar
                 tour = self._insercao_mais_barata(tour, melhor_no)
                 restantes.remove(melhor_no)
             return tour
@@ -213,7 +206,10 @@ class GeneticAlgorithmTSP:
 
     def inicializar_populacao(self):
         pop = []
-        n_boa = int(self.tamanho_populacao * self.config.fracao_inicial_boas)
+        n = len(self.coordenadas)
+        frac_boas = (self.config.fracao_inicial_boas_grande if n > self.config.desliga_gulosa_acima
+                     else self.config.fracao_inicial_boas)
+        n_boa = int(self.tamanho_populacao * frac_boas)
         for _ in range(n_boa):
             pop.append(self._inicializar_boa())
         while len(pop) < self.tamanho_populacao:
@@ -223,10 +219,11 @@ class GeneticAlgorithmTSP:
     # ======================================================
     # ------------------- Seleção --------------------------
     # ======================================================
-    def selecao_torneio(self, populacao, fitness_scores, k=3):
-        participantes = random.sample(list(zip(populacao, fitness_scores)), k)
+    @staticmethod
+    def _selecao_torneio_sobre_fit(pop_fit, k=3):
+        participantes = random.sample(pop_fit, k)
         participantes.sort(key=lambda x: x[1])
-        return participantes[0][0].copy()
+        return participantes[0][0].copy()  # retorna indivíduo
 
     # ======================================================
     # ------------------- Crossover ------------------------
@@ -252,60 +249,60 @@ class GeneticAlgorithmTSP:
         preencher(filho2, seq1)
         filho1 = [0] + filho1 + [0]
         filho2 = [0] + filho2 + [0]
-        # reparo mais inteligente (mantém diversidade e validade)
-        filho1 = self._reparo_por_familia(filho1)
-        filho2 = self._reparo_por_familia(filho2)
+
+        # lazy repair: só repara se inválido
+        if not self.validar_individuo(filho1):
+            filho1 = self._reparo_por_familia(filho1)
+        if not self.validar_individuo(filho2):
+            filho2 = self._reparo_por_familia(filho2)
+
         return filho1, filho2
 
     # ======================================================
     # -------------------- Mutação -------------------------
     # ======================================================
-    def mutacao_inversao(self, individuo, taxa_mutacao):
+    @staticmethod
+    def _mutacao_inversao(individuo, taxa_mutacao):
         if random.random() > taxa_mutacao:
             return individuo
         i, j = sorted(random.sample(range(1, len(individuo) - 1), 2))
         individuo[i:j] = reversed(individuo[i:j])
         return individuo
 
-    def mutacao_swap(self, individuo, taxa_mutacao):
+    @staticmethod
+    def _mutacao_swap(individuo, taxa_mutacao):
         if random.random() > taxa_mutacao:
             return individuo
         i, j = sorted(random.sample(range(1, len(individuo) - 1), 2))
         individuo[i], individuo[j] = individuo[j], individuo[i]
         return individuo
 
-    def mutacao_resample_familia(self, individuo, taxa_mutacao):
-        """
-        Troca um nó por outro da mesma família e insere na melhor posição.
-        Mantém a contagem correta por família e permite explorar combinações de nós.
-        """
+    def _mutacao_resample_familia(self, individuo, taxa_mutacao):
         if random.random() > taxa_mutacao * self.config.prob_resample_family:
             return individuo
 
-        internos = individuo[1:-1]
-        # escolhe uma posição e identifica a família
         p = random.randint(1, len(individuo) - 2)
         no_antigo = individuo[p]
         fidx = self.familia_no.get(no_antigo, 0) - 1
         if fidx < 0:
             return individuo
 
+        internos = individuo[1:-1]
         atuais = set(internos)
         candidatos = [n for n in self.familias[fidx] if n not in atuais or n == no_antigo]
         if len(candidatos) <= 1:
             return individuo
 
-        # remove o nó antigo
-        sem = individuo[:p] + individuo[p+1:]
-
-        # escolhe melhor candidato para inserir
+        # remove e re-insere melhor candidato da mesma família
+        sem = individuo[:p] + individuo[p + 1:]
+        dist = self._dist
         melhor_no, melhor_delta, melhor_pos = None, float('inf'), None
         for cand in candidatos:
             if cand == no_antigo:
                 continue
             for i in range(len(sem) - 1):
-                a, b = sem[i], sem[i+1]
-                delta = self._dist[a, cand] + self._dist[cand, b] - self._dist[a, b]
+                a, b = sem[i], sem[i + 1]
+                delta = dist[a, cand] + dist[cand, b] - dist[a, b]
                 if delta < melhor_delta:
                     melhor_delta = delta
                     melhor_no = cand
@@ -318,26 +315,29 @@ class GeneticAlgorithmTSP:
     # ------------------- Busca Local ----------------------
     # ======================================================
     def _two_opt_once(self, rota: List[int]) -> Tuple[List[int], bool]:
-        """Executa uma melhora 2-opt (uma passada) na parte interna da rota."""
+        """
+        Uma passada de 2-opt mais barata: reduz pares verificados (passo=2).
+        """
+        dist = self._dist
         best_gain = 0.0
         best_i, best_k = None, None
-        # ignorar 0 nas pontas
-        for i in range(1, len(rota) - 3):
-            a, b = rota[i-1], rota[i]
-            for k in range(i+1, len(rota) - 1):
-                c, d = rota[k], rota[k+1]
-                # ganho (positivo) se trocarmos as arestas (a-b, c-d) por (a-c, b-d)
-                delta = (self._dist[a, c] + self._dist[b, d]) - (self._dist[a, b] + self._dist[c, d])
-                if delta < best_gain:  # delta negativo melhora custo
+        # pular de 2 em 2 reduz ~50% das checagens, com perda mínima
+        for i in range(1, len(rota) - 4, 2):
+            a, b = rota[i - 1], rota[i]
+            for k in range(i + 1, len(rota) - 1, 2):
+                c, d = rota[k], rota[k + 1]
+                delta = (dist[a, c] + dist[b, d]) - (dist[a, b] + dist[c, d])
+                if delta < best_gain:  # delta negativo melhora
                     best_gain = delta
                     best_i, best_k = i, k
         if best_i is not None:
-            nova = rota[:best_i] + list(reversed(rota[best_i:best_k+1])) + rota[best_k+1:]
+            nova = rota[:best_i] + list(reversed(rota[best_i:best_k + 1])) + rota[best_k + 1:]
             return nova, True
         return rota, False
 
-    def two_opt(self, rota: List[int], max_iter=50) -> List[int]:
-        """Aplica 2-opt até estagnar ou atingir max_iter."""
+    def two_opt(self, rota: List[int], max_iter=None) -> List[int]:
+        if max_iter is None:
+            max_iter = self.config.max_iter_2opt
         atual = rota
         for _ in range(max_iter):
             atual, better = self._two_opt_once(atual)
@@ -349,79 +349,74 @@ class GeneticAlgorithmTSP:
     # -------------------- Evolução ------------------------
     # ======================================================
     def evoluir(self):
-        populacao = self.inicializar_populacao()
+        # --- inicialização
+        base_pop = self.inicializar_populacao()
+        pop_fit = [(ind, self._fitness_de(ind, self._dist)) for ind in base_pop]  # cache fitness
+
         melhor_individuo, melhor_fitness = None, float('inf')
         sem_melhoria = 0
-        limite_sem_melhoria = self.config.paciencia
         taxa_mutacao = self.taxa_mutacao_base
 
         for geracao in range(self.max_geracoes):
-            fitness_scores = [self.calcular_fitness(ind) for ind in populacao]
-            min_fit_idx = int(np.argmin(fitness_scores))
-            melhor_atual = fitness_scores[min_fit_idx]
-
-            melhora = melhor_fitness - melhor_atual
-            if melhora > 1e-4:  # tolerância: 0.0001
-                melhor_fitness = melhor_atual
-                melhor_individuo = populacao[min_fit_idx].copy()
+            # melhor da geração (com cache)
+            pop_fit.sort(key=lambda x: x[1])
+            if pop_fit[0][1] + 1e-4 < melhor_fitness:
+                melhor_individuo = pop_fit[0][0].copy()
+                melhor_fitness = pop_fit[0][1]
                 sem_melhoria = 0
             else:
                 sem_melhoria += 1
 
             self.historico_fitness.append(melhor_fitness)
 
-            # elitismo
-            pop_fit = sorted(zip(populacao, fitness_scores), key=lambda x: x[1])
-            nova_pop = [ind for ind, _ in pop_fit[:self.elite_size]]
+            # elitismo (mantém pares (ind, fit))
+            nova_pop_fit = pop_fit[:self.elite_size]
 
-            # reprodução
-            while len(nova_pop) < self.tamanho_populacao:
-                pai1 = self.selecao_torneio(populacao, fitness_scores, k=3)
-                pai2 = self.selecao_torneio(populacao, fitness_scores, k=3)
+            # reprodução (gera já com fitness calculado uma única vez)
+            while len(nova_pop_fit) < self.tamanho_populacao:
+                pai1 = self._selecao_torneio_sobre_fit(pop_fit, k=3)
+                pai2 = self._selecao_torneio_sobre_fit(pop_fit, k=3)
 
                 f1, f2 = self.crossover_ox(pai1, pai2)
 
-                # mutações estruturais (mantêm conjunto de nós)
-                f1 = self.mutacao_inversao(f1, taxa_mutacao)
+                # mutações leves
+                f1 = self._mutacao_inversao(f1, taxa_mutacao)
                 if random.random() < self.config.prob_swap_mut:
-                    f1 = self.mutacao_swap(f1, taxa_mutacao)
-                f2 = self.mutacao_inversao(f2, taxa_mutacao)
+                    f1 = self._mutacao_swap(f1, taxa_mutacao)
+                f2 = self._mutacao_inversao(f2, taxa_mutacao)
                 if random.random() < self.config.prob_swap_mut:
-                    f2 = self.mutacao_swap(f2, taxa_mutacao)
+                    f2 = self._mutacao_swap(f2, taxa_mutacao)
 
-                # mutação de reamostragem por família (troca um nó por outro da mesma família)
-                f1 = self.mutacao_resample_familia(f1, taxa_mutacao)
-                f2 = self.mutacao_resample_familia(f2, taxa_mutacao)
+                # mutação troca de nó dentro da família
+                f1 = self._mutacao_resample_familia(f1, taxa_mutacao)
+                f2 = self._mutacao_resample_familia(f2, taxa_mutacao)
 
-                # busca local (memetic)
+                # busca local leve (prob baixa, iter limitado)
                 if random.random() < self.config.prob_2opt:
-                    f1 = self.two_opt(f1, max_iter=50)
+                    f1 = self.two_opt(f1, max_iter=self.config.max_iter_2opt)
                 if random.random() < self.config.prob_2opt:
-                    f2 = self.two_opt(f2, max_iter=50)
+                    f2 = self.two_opt(f2, max_iter=self.config.max_iter_2opt)
 
-                # reparo final por segurança
-                f1 = self._reparo_por_familia(f1)
-                f2 = self._reparo_por_familia(f2)
+                # fitness (uma única vez)
+                fit1 = self._fitness_de(f1, self._dist)
+                fit2 = self._fitness_de(f2, self._dist)
 
-                nova_pop.extend([f1, f2])
+                nova_pop_fit.append((f1, fit1))
+                if len(nova_pop_fit) < self.tamanho_populacao:
+                    nova_pop_fit.append((f2, fit2))
 
-            # política de imigrantes se estagnar
-            if sem_melhoria >= limite_sem_melhoria:
-                # injeta imigrantes aleatórios e aumenta mutação temporariamente
-                qtd = int(self.tamanho_populacao * self.config.imigrantes)
-                for _ in range(qtd):
-                    nova_pop[-(_+1)] = self.gerar_individuo_aleatorio()
-                taxa_mutacao = min(0.95, taxa_mutacao * self.config.mutation_boost)
-                sem_melhoria = 0  # dá um "kick"
-                # mantém o melhor até agora
-                if melhor_individuo is not None:
-                    nova_pop[0] = melhor_individuo.copy()
-                print(f"⚡ Estagnação: injetando imigrantes e elevando mutação para {taxa_mutacao:.2f}")
-
-            populacao = nova_pop[:self.tamanho_populacao]
+            pop_fit = nova_pop_fit[:self.tamanho_populacao]
 
             if geracao % 50 == 0:
                 print(f"Geração {geracao}: melhor fitness = {melhor_fitness:.2f}")
+
+            # --- parada antecipada por convergência (rápida) ---
+            w = self.config.early_stop_window
+            if geracao > self.config.early_stop_min_gen and len(self.historico_fitness) >= w:
+                janela = self.historico_fitness[-w:]
+                if np.std(janela) < self.config.early_stop_std_eps:
+                    print(f"⏹ Convergência detectada na geração {geracao}. Encerrando cedo.")
+                    break
 
         return melhor_individuo, melhor_fitness, self.historico_fitness
 
