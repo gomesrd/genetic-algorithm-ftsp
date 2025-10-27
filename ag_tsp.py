@@ -7,45 +7,30 @@ from typing import List, Tuple, Optional
 from configuracao import GeneticAlgorithmConfig
 
 
-# ===========================
-# ========= GA TSP ==========
-# ===========================
 class GeneticAlgorithmTSP:
     def __init__(self, coordenadas, familias, visitas_familia, familia_no, config: GeneticAlgorithmConfig):
-        """
-        coordenadas: List[Tuple[float,float]] índice = nó
-        familias: List[List[int]] lista de listas de nós (cada sublista é uma família)
-        visitas_familia: List[int] quantidade a visitar em cada família (mesmo comprimento que familias)
-        familia_no: dict {no: family_idx+1}
-        """
+
         self.coordenadas = coordenadas
         self.familias = familias
         self.visitas_familia = visitas_familia
         self.familia_no = familia_no
         self.config = config
 
-        # parâmetros
         self.tamanho_populacao = config.tamanho_populacao
         self.taxa_mutacao_base = config.taxa_mutacao
         self.taxa_crossover = config.taxa_crossover
         self.elite_size = config.elite_size
         self.max_geracoes = config.max_geracoes
 
-        # histórico
         self.historico_fitness = []
 
-        # seed opcional
         if self.config.seed is not None:
             random.seed(self.config.seed)
             np.random.seed(self.config.seed)
 
-        # matriz de distâncias pré-computada
         self._dist = self._precompute_dist()
         self._familia_sets = [set(f) for f in self.familias]
 
-    # ======================================================
-    # ------------------ Utilitários -----------------------
-    # ======================================================
     def _precompute_dist(self):
         n = len(self.coordenadas)
         D = np.zeros((n, n), dtype=float)
@@ -71,7 +56,6 @@ class GeneticAlgorithmTSP:
 
     @staticmethod
     def _fitness_de(individuo, dist):
-        # versão estática mais rápida recebendo dist por referência
         s = 0.0
         for i in range(len(individuo) - 1):
             s += dist[individuo[i], individuo[i + 1]]
@@ -80,9 +64,6 @@ class GeneticAlgorithmTSP:
     def calcular_fitness(self, individuo):
         return self._fitness_de(individuo, self._dist)
 
-    # ======================================================
-    # ----------- Geração / Reparo de indivíduos -----------
-    # ======================================================
     def _amostrar_nos_por_familia(self):
         individuo = [0]
         for l, familia in enumerate(self.familias):
@@ -111,16 +92,11 @@ class GeneticAlgorithmTSP:
         return rota[:melhor_pos] + [novo_no] + rota[melhor_pos:]
 
     def _reparo_por_familia(self, individuo: List[int]) -> List[int]:
-        """
-        Repara um indivíduo para que exatamente visitas_familia[l] nós de cada família apareçam.
-        Remove excedentes de menor impacto e adiciona faltantes por inserção barata.
-        """
         dist = self._dist
         for _ in range(self.config.repeticoes_reparo_max):
             cont = self._contagem_por_familia(individuo)
             ok = True
 
-            # remover excedentes
             for fidx, (count, need) in enumerate(zip(cont, self.visitas_familia)):
                 if count > need:
                     ok = False
@@ -137,7 +113,6 @@ class GeneticAlgorithmTSP:
                         individuo = individuo[:melhor_pos] + individuo[melhor_pos + 1:]
 
             if ok:
-                # adicionar faltantes
                 cont = self._contagem_por_familia(individuo)
                 for fidx, (count, need) in enumerate(zip(cont, self.visitas_familia)):
                     if count < need:
@@ -149,7 +124,7 @@ class GeneticAlgorithmTSP:
                         melhor_add = None
                         melhor_delta = float('inf')
                         melhor_pos = None
-                        # melhor inserção barata (linear)
+
                         for cand in candidatos:
                             for i in range(len(individuo) - 1):
                                 a, b = individuo[i], individuo[i + 1]
@@ -172,9 +147,6 @@ class GeneticAlgorithmTSP:
         cont_fam = self._contagem_por_familia(individuo)
         return all(cont_fam[i] == self.visitas_familia[i] for i in range(len(cont_fam)))
 
-    # ======================================================
-    # ---------------- Inicialização -----------------------
-    # ======================================================
     def _inicializar_boa(self) -> List[int]:
         k = self.config.bestofk_init
         candidatos = [self._amostrar_nos_por_familia() for _ in range(k)]
@@ -190,7 +162,6 @@ class GeneticAlgorithmTSP:
             restantes.remove(start)
             while restantes:
                 melhor_no, melhor_dist = None, float('inf')
-                # nó mais próximo do tour (ignora depósito)
                 for n in restantes:
                     d = min(dist[n, t] for t in tour if t != 0)
                     if d < melhor_dist:
@@ -207,7 +178,7 @@ class GeneticAlgorithmTSP:
     def inicializar_populacao(self):
         pop = []
         n = len(self.coordenadas)
-        frac_boas = (self.config.fracao_inicial_boas_grande if n > self.config.desliga_gulosa_acima
+        frac_boas = (self.config.fracao_inicial_boas_grande if n > self.config.limite_inicializacao_boa
                      else self.config.fracao_inicial_boas)
         n_boa = int(self.tamanho_populacao * frac_boas)
         for _ in range(n_boa):
@@ -216,18 +187,12 @@ class GeneticAlgorithmTSP:
             pop.append(self.gerar_individuo_aleatorio())
         return pop
 
-    # ======================================================
-    # ------------------- Seleção --------------------------
-    # ======================================================
     @staticmethod
     def _selecao_torneio_sobre_fit(pop_fit, k=3):
         participantes = random.sample(pop_fit, k)
         participantes.sort(key=lambda x: x[1])
-        return participantes[0][0].copy()  # retorna indivíduo
+        return participantes[0][0].copy()
 
-    # ======================================================
-    # ------------------- Crossover ------------------------
-    # ======================================================
     def crossover_ox(self, pai1, pai2):
         if random.random() > self.taxa_crossover:
             return pai1.copy(), pai2.copy()
@@ -250,7 +215,6 @@ class GeneticAlgorithmTSP:
         filho1 = [0] + filho1 + [0]
         filho2 = [0] + filho2 + [0]
 
-        # lazy repair: só repara se inválido
         if not self.validar_individuo(filho1):
             filho1 = self._reparo_por_familia(filho1)
         if not self.validar_individuo(filho2):
@@ -258,9 +222,6 @@ class GeneticAlgorithmTSP:
 
         return filho1, filho2
 
-    # ======================================================
-    # -------------------- Mutação -------------------------
-    # ======================================================
     @staticmethod
     def _mutacao_inversao(individuo, taxa_mutacao):
         if random.random() > taxa_mutacao:
@@ -293,7 +254,6 @@ class GeneticAlgorithmTSP:
         if len(candidatos) <= 1:
             return individuo
 
-        # remove e re-insere melhor candidato da mesma família
         sem = individuo[:p] + individuo[p + 1:]
         dist = self._dist
         melhor_no, melhor_delta, melhor_pos = None, float('inf'), None
@@ -311,23 +271,17 @@ class GeneticAlgorithmTSP:
             individuo = sem[:melhor_pos] + [melhor_no] + sem[melhor_pos:]
         return individuo
 
-    # ======================================================
-    # ------------------- Busca Local ----------------------
-    # ======================================================
     def _two_opt_once(self, rota: List[int]) -> Tuple[List[int], bool]:
-        """
-        Uma passada de 2-opt mais barata: reduz pares verificados (passo=2).
-        """
         dist = self._dist
         best_gain = 0.0
         best_i, best_k = None, None
-        # pular de 2 em 2 reduz ~50% das checagens, com perda mínima
+
         for i in range(1, len(rota) - 4, 2):
             a, b = rota[i - 1], rota[i]
             for k in range(i + 1, len(rota) - 1, 2):
                 c, d = rota[k], rota[k + 1]
                 delta = (dist[a, c] + dist[b, d]) - (dist[a, b] + dist[c, d])
-                if delta < best_gain:  # delta negativo melhora
+                if delta < best_gain:
                     best_gain = delta
                     best_i, best_k = i, k
         if best_i is not None:
@@ -345,20 +299,15 @@ class GeneticAlgorithmTSP:
                 break
         return atual
 
-    # ======================================================
-    # -------------------- Evolução ------------------------
-    # ======================================================
     def evoluir(self):
-        # --- inicialização
         base_pop = self.inicializar_populacao()
-        pop_fit = [(ind, self._fitness_de(ind, self._dist)) for ind in base_pop]  # cache fitness
+        pop_fit = [(ind, self._fitness_de(ind, self._dist)) for ind in base_pop]
 
         melhor_individuo, melhor_fitness = None, float('inf')
         sem_melhoria = 0
         taxa_mutacao = self.taxa_mutacao_base
 
         for geracao in range(self.max_geracoes):
-            # melhor da geração (com cache)
             pop_fit.sort(key=lambda x: x[1])
             if pop_fit[0][1] + 1e-4 < melhor_fitness:
                 melhor_individuo = pop_fit[0][0].copy()
@@ -369,17 +318,14 @@ class GeneticAlgorithmTSP:
 
             self.historico_fitness.append(melhor_fitness)
 
-            # elitismo (mantém pares (ind, fit))
             nova_pop_fit = pop_fit[:self.elite_size]
 
-            # reprodução (gera já com fitness calculado uma única vez)
             while len(nova_pop_fit) < self.tamanho_populacao:
                 pai1 = self._selecao_torneio_sobre_fit(pop_fit, k=3)
                 pai2 = self._selecao_torneio_sobre_fit(pop_fit, k=3)
 
                 f1, f2 = self.crossover_ox(pai1, pai2)
 
-                # mutações leves
                 f1 = self._mutacao_inversao(f1, taxa_mutacao)
                 if random.random() < self.config.prob_swap_mut:
                     f1 = self._mutacao_swap(f1, taxa_mutacao)
@@ -387,17 +333,14 @@ class GeneticAlgorithmTSP:
                 if random.random() < self.config.prob_swap_mut:
                     f2 = self._mutacao_swap(f2, taxa_mutacao)
 
-                # mutação troca de nó dentro da família
                 f1 = self._mutacao_resample_familia(f1, taxa_mutacao)
                 f2 = self._mutacao_resample_familia(f2, taxa_mutacao)
 
-                # busca local leve (prob baixa, iter limitado)
                 if random.random() < self.config.prob_2opt:
                     f1 = self.two_opt(f1, max_iter=self.config.max_iter_2opt)
                 if random.random() < self.config.prob_2opt:
                     f2 = self.two_opt(f2, max_iter=self.config.max_iter_2opt)
 
-                # fitness (uma única vez)
                 fit1 = self._fitness_de(f1, self._dist)
                 fit2 = self._fitness_de(f2, self._dist)
 
@@ -410,7 +353,6 @@ class GeneticAlgorithmTSP:
             if geracao % 50 == 0:
                 print(f"Geração {geracao}: melhor fitness = {melhor_fitness:.2f}")
 
-            # --- parada antecipada por convergência (rápida) ---
             w = self.config.early_stop_window
             if geracao > self.config.early_stop_min_gen and len(self.historico_fitness) >= w:
                 janela = self.historico_fitness[-w:]
@@ -420,9 +362,17 @@ class GeneticAlgorithmTSP:
 
         return melhor_individuo, melhor_fitness, self.historico_fitness
 
-    # ======================================================
-    # -------------------- Plotagens -----------------------
-    # ======================================================
+    def verificar_rota(self, individuo):
+        if not self.validar_individuo(individuo):
+            return False
+        for no in individuo:
+            if no < 0 or no >= len(self.coordenadas):
+                print(f"⚠️ Nó inválido encontrado: {no}")
+                return False
+        print("✅ Rota válida: todos os nós existem e respeitam as famílias.")
+        return True
+
+
     def plotar_convergencia(self):
         plt.figure(figsize=(10, 6))
         plt.plot(self.historico_fitness, linewidth=2)
@@ -435,7 +385,6 @@ class GeneticAlgorithmTSP:
     def plotar_rota(self, individuo, caminho: str = None, mostrar: bool = False):
         fig, ax = plt.subplots(figsize=(12, 8))
 
-        # --- Plota as cidades por família ---
         cores = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'cyan', 'magenta']
         for l, familia in enumerate(self.familias):
             for no in familia:
@@ -443,17 +392,14 @@ class GeneticAlgorithmTSP:
                            c=cores[l % len(cores)], s=100, alpha=0.7,
                            label=f'Família {l + 1}' if no == familia[0] else "")
 
-        # --- Depósito ---
         ax.scatter(self.coordenadas[0][0], self.coordenadas[0][1],
                    c='black', s=200, marker='s', label='Depósito')
 
-        # --- Rota ---
         for i in range(len(individuo) - 1):
             x1, y1 = self.coordenadas[individuo[i]]
             x2, y2 = self.coordenadas[individuo[i + 1]]
             ax.plot([x1, x2], [y1, y2], 'k-', alpha=0.6, linewidth=2)
 
-        # --- Índices ---
         for i, (x, y) in enumerate(self.coordenadas):
             ax.annotate(str(i), (x, y), xytext=(5, 5), textcoords='offset points', fontsize=8)
 

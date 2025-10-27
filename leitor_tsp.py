@@ -3,6 +3,7 @@ class TSPReader:
     def ler_tsp(arquivo: str):
         coordenadas, aux, v, n = [], [], [], []
         ler_coordenadas = ler_familias = False
+        best_bound = None
 
         try:
             with open(arquivo, 'r') as f:
@@ -12,6 +13,13 @@ class TSPReader:
 
         for linha in conteudo:
             linha = linha.strip()
+
+            if linha.startswith('BEST_BOUND'):
+                partes = linha.split(':')
+                if len(partes) > 1:
+                    best_bound = float(partes[1].strip())
+                continue
+
             if linha == 'NODE_COORD_SECTION':
                 ler_coordenadas = True
                 continue
@@ -25,6 +33,7 @@ class TSPReader:
             if ler_coordenadas and linha:
                 partes = linha.split()
                 coordenadas.append((float(partes[1]), float(partes[2])))
+
             elif ler_familias and linha:
                 partes = linha.split()
                 aux.append((int(partes[0]), int(partes[1])))
@@ -34,4 +43,4 @@ class TSPReader:
             n.append(elemento[0])
             v.append(elemento[1])
 
-        return coordenadas, L, V, n, v
+        return coordenadas, L, V, n, v, best_bound

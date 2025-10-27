@@ -1,9 +1,8 @@
 from leitor_tsp import TSPReader
 
 class TSPInstance:
-    """Representa uma instância do problema TSP com famílias."""
     def __init__(self, arquivo: str):
-        self.coordenadas, self.L, self.V, self.n, self.v = TSPReader.ler_tsp(arquivo)
+        self.coordenadas, self.L, self.V, self.n, self.v, self.best_bound = TSPReader.ler_tsp(arquivo)
         self.m = len(self.coordenadas) - 1
         self.familias, self.familia_no = self._construir_familias()
 
